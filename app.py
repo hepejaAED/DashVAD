@@ -8,7 +8,7 @@ from scipy.stats import mannwhitneyu
 from itertools import combinations
 
 # ============================================================================
-# CARGA Y PREPARACIÓN DE DATOS
+# CARGA Y PREPARACIÓN DE DATOS (como teníamos en el código original, limpieza, filtrado etc)
 # ============================================================================
 
 df = pd.read_csv('data/Arritmias.csv')
@@ -32,8 +32,8 @@ PALETTE = {0: COLOR_AV0, 1: COLOR_AV1}
 LABEL_AV0 = 'AV = 0 (sin arritmia)'
 LABEL_AV1 = 'AV = 1 (con arritmia)'
 
-# ============================================================================
-# FUNCIONES AUXILIARES
+# ===========================================================================
+# FUNCIONES AUXILIARES PARA EL ANÁLISIS
 # ============================================================================
 
 def calcular_distancia_mahalanobis(col_a, col_b):
@@ -124,7 +124,7 @@ app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
 app.layout = html.Div([
     html.H1("Dashboard: Marcadores Pro-Arrítmicos", 
-            style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#f8f9fa'}),
+            style={'textAlign': 'center'}),
     
     html.Div([
         html.H2("Análisis de Grupos y Relaciones", 
@@ -134,9 +134,9 @@ app.layout = html.Div([
             html.Div([
                 dcc.Graph(id='graph-scatter-grupo')
             ], style={
-                'width': '70%',
+                'width': '100%',
                 'display': 'inline-block',
-                'verticalAlign': 'top',
+                'verticalAlign': 'middle',
                 'padding': '20px',
                 'boxSizing': 'border-box'
             }),
@@ -160,7 +160,7 @@ app.layout = html.Div([
                         dcc.Dropdown(
                             id='dropdown-eje-y',
                             options=[{'label': m, 'value': m} for m in MARCADORES],
-                            value=MARCADORES[1] if len(MARCADORES) > 1 else MARCADORES[0],
+                            value=MARCADORES[1],
                             clearable=False
                         )
                     ], style={'marginBottom': 20}),
@@ -194,8 +194,8 @@ app.layout = html.Div([
                 ], style={
                     'backgroundColor': 'rgb(250, 250, 250)',
                     'padding': '20px',
-                    'borderRadius': '5px',
-                    'borderLeft': '3px solid #4C72B0'
+                    'borderRadius': '10px',
+                    'borderLeft': '5px solid #4C72B0'
                 })
             ], style={
                 'width': '28%',
@@ -207,7 +207,11 @@ app.layout = html.Div([
         ], style={
             'display': 'flex',
             'width': '100%'
-        })
+        }),
+        
+        html.Div([
+            dcc.Graph(id='graph-radar')
+        ], style={'padding': '20px'})
     ], style={'padding': '20px'})
 ])
 
@@ -224,7 +228,6 @@ app.layout = html.Div([
 )
 def update_scatter_grupo(eje_x, eje_y, escala_x, escala_y):
     """Actualiza el scatter plot cuando cambian los ejes o escalas"""
-    
     fig = go.Figure()
     
     dist_mahal = calcular_distancia_mahalanobis(eje_x, eje_y)
@@ -254,8 +257,7 @@ def update_scatter_grupo(eje_x, eje_y, escala_x, escala_y):
             y=[elipse_data['center'][1]],
             mode='markers+text',
             name=f"{label} (centroide)",
-            marker=dict(size=12, color=elipse_data['color'], symbol='x', line=dict(width=3)),
-            text=[''],
+            marker=dict(size=20, color=elipse_data['color'], symbol='x'),
             hovertemplate=f"<b>Centroide {label}</b><br>X: %{{x:.2f}}<br>Y: %{{y:.2f}}<extra></extra>",
             showlegend=False
         ))
@@ -292,7 +294,7 @@ def update_scatter_grupo(eje_x, eje_y, escala_x, escala_y):
     
     title_text = f"<b>{eje_x} vs {eje_y}</b>"
     if not np.isnan(dist_mahal):
-        title_text += f"<br><sub>Distancia Mahalanobis: {dist_mahal:.3f}</sub>"
+        title_text += f"<br>Distancia Mahalanobis: {dist_mahal:.3f}"
     
     fig.update_layout(
         title=title_text,
@@ -300,11 +302,59 @@ def update_scatter_grupo(eje_x, eje_y, escala_x, escala_y):
         yaxis_title=eje_y,
         xaxis_type=escala_x,
         yaxis_type=escala_y,
-        height=600,
+        height=1000,
         hovermode='closest',
-        template='plotly_white',
+        template='plotly_white', # Para que no se vea el fondo azul/grisaceo
         margin=dict(l=60, b=60, t=100, r=20),
-        legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)')
+        legend=dict(x=0.02, y=0.98,font=dict(size=20))
+    )
+    
+    return fig
+
+@callback(
+    Output('graph-radar', 'figure'),
+    [Input('dropdown-eje-x', 'value')]
+)
+def update_radar(dummy):
+    """Radar chart con perfil normalizado por grupo"""
+    
+    marcadores_sin_demo = [m for m in MARCADORES if m.lower() not in ['edad', 'sexo']] # Queremos quitar estas variables que no aportan tanta información
+    
+    df_norm = df[marcadores_sin_demo].copy()
+    for col in marcadores_sin_demo:
+        mn, mx = df[col].min(), df[col].max()
+        df_norm[col] = (df[col] - mn) / (mx - mn) * 100 # Para que estén entre 0 y 100
+    
+    mean0 = df_norm[df['AV'] == 0].mean()
+    mean1 = df_norm[df['AV'] == 1].mean()
+    
+    labels = list(marcadores_sin_demo)
+    N = len(labels)
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    angles += angles[:1]
+    
+    fig = go.Figure()
+    
+    for mean, color, label in [(mean0, COLOR_AV0, LABEL_AV0), (mean1, COLOR_AV1, LABEL_AV1)]:
+        vals = mean.tolist() + [mean.iloc[0]]
+        fig.add_trace(go.Scatterpolar(
+            r=vals,
+            theta=labels + [labels[0]],
+            fill='toself',
+            name=label,
+            line=dict(color=color),
+            marker=dict(size=5),
+            fillcolor=color,
+            opacity=0.3
+        ))
+    
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 60])),
+        title='Perfil medio normalizado por grupo AV (Radar Chart)',
+        height=1000,
+        showlegend=True,
+        template='plotly_white',
+        legend=dict(x=0.02, y=0.98,font=dict(size=20))
     )
     
     return fig
