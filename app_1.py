@@ -1,3 +1,8 @@
+# AUTORES:
+# José Aguilar Milla
+# Javier Herrero Pérez
+
+
 import dash
 from dash import dcc, html, callback, Input, Output, dash_table
 import pandas as pd
@@ -10,8 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 
-# CARGA Y PREPARACIÓN DE DATOS (como teníamos en el código original, limpieza, filtrado etc)
-
+# CARGA Y PREPARACIÓN DE DATOS (como teníamos en el código de la otras tareas, limpieza, filtrado etc)
 df = pd.read_csv('data/Arritmias.csv')
 
 # Convertir comas a puntos en columnas numéricas
@@ -323,6 +327,7 @@ def construir_radar(paciente_id=None):
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+app.config.suppress_callback_exceptions = True  # lo ponemos para evitar errores al cargar los callbacks de pestañas que no están en el layout inicial
 
 # LAYOUTS POR PESTAÑA
 
@@ -713,14 +718,17 @@ def update_tabla(paciente_id):
 
     av_real = int(fila['AV'].values[0])
 
-    # Construimos los datos de la tabla
+    # Construimos los datos de la tabla (excluyendo SEXO y EDAD)
     rows = []
     for marcador in MARCADORES:
+        # Saltar SEXO y EDAD
+        if marcador.lower() in ['sexo', 'edad']:
+            continue
+            
         valor_paciente = fila[marcador].values[0]
         media_av0 = df0[marcador].mean()
         media_av1 = df1[marcador].mean()
 
-        # Indicador de "más cerca de qué grupo está"
         dist_0 = abs(valor_paciente - media_av0)
         dist_1 = abs(valor_paciente - media_av1)
         mas_cerca = 'AV = 0' if dist_0 < dist_1 else 'AV = 1'
@@ -732,7 +740,8 @@ def update_tabla(paciente_id):
             'Media AV=1': f"{media_av1:.2f}",
             'Más cerca de': mas_cerca
         })
-
+        if marcador.lower() in ['sexo', 'edad']:
+            continue
     # Estilos condicionales: resaltar la columna del grupo real del paciente
     grupo_real_col = 'Media AV=0' if av_real == 0 else 'Media AV=1'
 
