@@ -10,9 +10,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 
-# ============================================================================
 # CARGA Y PREPARACIÓN DE DATOS (como teníamos en el código original, limpieza, filtrado etc)
-# ============================================================================
 
 df = pd.read_csv('data/Arritmias.csv')
 
@@ -39,9 +37,7 @@ PALETTE = {0: COLOR_AV0, 1: COLOR_AV1}
 LABEL_AV0 = 'AV = 0 (sin arritmia)'
 LABEL_AV1 = 'AV = 1 (con arritmia)'
 
-# ============================================================================
 # ENTRENAMIENTO DEL MODELO DE REGRESIÓN LOGÍSTICA (para predicciones individuales)
-# ============================================================================
 
 # Usamos los marcadores cardíacos (sin EDAD, SEXO, ID, AV) para el modelo
 # Esto es coherente con lo que hace el notebook
@@ -74,9 +70,7 @@ def predecir_probabilidad(paciente_id):
     return prob
 
 
-# ===========================================================================
 # FUNCIONES AUXILIARES PARA EL ANÁLISIS
-# ============================================================================
 
 def calcular_distancia_mahalanobis(col_a, col_b):
     """Calcula la distancia de Mahalanobis entre dos grupos para dos variables"""
@@ -325,16 +319,12 @@ def construir_radar(paciente_id=None):
     return fig
 
 
-# ============================================================================
 # CREAR APP
-# ============================================================================
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-# ============================================================================
 # LAYOUTS POR PESTAÑA
-# ============================================================================
 
 # --- Layout pestaña GRUPAL (la original) ---
 layout_grupal = html.Div([
@@ -547,9 +537,8 @@ layout_individual = html.Div([
 ], style={'padding': '20px'})
 
 
-# ============================================================================
 # LAYOUT PRINCIPAL CON PESTAÑAS
-# ============================================================================
+
 
 app.layout = html.Div([
     html.H1("Dashboard: Marcadores Pro-Arrítmicos",
@@ -568,9 +557,7 @@ app.layout = html.Div([
 ])
 
 
-# ============================================================================
 # CALLBACKS
-# ============================================================================
 
 @callback(
     Output('contenido-tab', 'children'),
@@ -614,7 +601,8 @@ def update_radar(dummy):
      Input('dropdown-eje-y-ind', 'value'),
      Input('radio-escala-x-ind', 'value'),
      Input('radio-escala-y-ind', 'value'),
-     Input('dropdown-paciente', 'value')]
+     Input('dropdown-paciente', 'value')],
+    prevent_initial_call=True
 )
 def update_scatter_individual(eje_x, eje_y, escala_x, escala_y, paciente_id):
     return construir_scatter(eje_x, eje_y, escala_x, escala_y, paciente_id=paciente_id)
@@ -622,7 +610,8 @@ def update_scatter_individual(eje_x, eje_y, escala_x, escala_y, paciente_id):
 
 @callback(
     Output('graph-radar-individual', 'figure'),
-    [Input('dropdown-paciente', 'value')]
+    [Input('dropdown-paciente', 'value')],
+    prevent_initial_call=True
 )
 def update_radar_individual(paciente_id):
     return construir_radar(paciente_id=paciente_id)
@@ -630,7 +619,8 @@ def update_radar_individual(paciente_id):
 
 @callback(
     Output('panel-prediccion', 'children'),
-    [Input('dropdown-paciente', 'value')]
+    [Input('dropdown-paciente', 'value')],
+    prevent_initial_call=True
 )
 def update_prediccion(paciente_id):
     """Muestra la probabilidad de arritmia estimada por el modelo"""
@@ -709,7 +699,8 @@ def update_prediccion(paciente_id):
 
 @callback(
     Output('tabla-paciente', 'children'),
-    [Input('dropdown-paciente', 'value')]
+    [Input('dropdown-paciente', 'value')],
+    prevent_initial_call=True
 )
 def update_tabla(paciente_id):
     """Muestra una tabla con los datos del paciente comparados con las medias por grupo"""
