@@ -1,799 +1,731 @@
-# AUTORES:
-# José Aguilar Milla
-# Javier Herrero Pérez
-
+# ============================================================
+# DASHBOARD PCA - ARRITMIAS
+# ============================================================
 
 import dash
-from dash import dcc, html, callback, Input, Output, dash_table
-import pandas as pd
-import plotly.graph_objs as go
-import numpy as np
-from scipy.spatial.distance import mahalanobis
-from scipy.stats import mannwhitneyu
-from itertools import combinations
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from imblearn.over_sampling import SMOTE
+from dash import dcc, html
+from dash.dependencies import Input, Output
 
-# CARGA Y PREPARACIÓN DE DATOS (como teníamos en el código de la otras tareas, limpieza, filtrado etc)
+import pandas as pd
+import numpy as np
+
+import plotly.graph_objs as go
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+
+
+
+# CARGA DE DATOS Y TRATAMIENTO DE ESTOS
+
 df = pd.read_csv('data/Arritmias.csv')
 
-# Convertir comas a puntos en columnas numéricas
-cols = df.columns[1:-4]
-for i in range(len(cols)):
-    df[cols[i]] = df[cols[i]].str.replace(",", ".").astype(float)
+# COLUMNAS NUMÉRICAS
+cols = df.columns[1:-1]
 
-# Obtener todas las columnas de marcadores (excepto ID y AV)
-MARCADORES = df.columns[1:-1]
+for c in cols:
+    df[c] = df[c].astype(str).str.replace(",", ".")
+    df[c] = pd.to_numeric(df[c], errors='coerce')
 
-# Separar por grupo AV
-df0 = df[df['AV'] == 0]
-df1 = df[df['AV'] == 1]
+# ------------------------------------------------------------
+# Variables
+# ------------------------------------------------------------
 
-# Lista de IDs de pacientes
 PACIENTES = df['PACIENTES'].tolist()
 
-# Colores
-COLOR_AV0 = '#4C72B0'
-COLOR_AV1 = '#DD8452'
-COLOR_PACIENTE = '#2CA02C'  # verde para destacar al paciente
-PALETTE = {0: COLOR_AV0, 1: COLOR_AV1}
-LABEL_AV0 = 'AV = 0 (sin arritmia)'
-LABEL_AV1 = 'AV = 1 (con arritmia)'
+MARCADORES = [
+    c for c in df.columns
+    if c not in ['PACIENTES', 'AV'] # AV es la variable objetivo, no un marcador
+]
 
-# ENTRENAMIENTO DEL MODELO DE REGRESIÓN LOGÍSTICA (para predicciones individuales)
+# Excluimos edad y sexo para PCA
+MARCADORES_PCA = [
+    c for c in MARCADORES
+    if c not in ['SEXO']
+]
+VARIABLES_HISTOGRAMA = [
+    c for c in df.columns
+    if c not in ['PACIENTES', 'AV',"SEXO"]
+]
 
-# Usamos los marcadores cardíacos (sin EDAD, SEXO, ID, AV) para el modelo
-# Esto es coherente con lo que hace el notebook
-MARCADORES_MODELO = [m for m in MARCADORES if m.lower() not in ['edad', 'sexo']]
 
-X_modelo = df[MARCADORES_MODELO].values
-y_modelo = df['AV'].values
+# PCA
+X = df[MARCADORES_PCA]
 
 # Escalado
 scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X_modelo)
+X_scaled = scaler.fit_transform(X)
 
-# SMOTE para balancear clases (como en el notebook)
-smote = SMOTE(random_state=42, k_neighbors=5)
-X_resampled, y_resampled = smote.fit_resample(X_scaled, y_modelo)
+# PCA
+pca = PCA(n_components=2)
 
-# Entrenamiento del modelo
-modelo_lr = LogisticRegression(max_iter=1000, random_state=42)
-modelo_lr.fit(X_resampled, y_resampled)
+X_pca = pca.fit_transform(X_scaled)
 
+df_pca = pd.DataFrame({
+    'PC1': X_pca[:, 0],
+    'PC2': X_pca[:, 1],
+    'PACIENTES': df['PACIENTES'],
+    'AV': df['AV']
+})
 
-def predecir_probabilidad(paciente_id):
-    """Predice la probabilidad de arritmia para un paciente concreto"""
-    fila = df[df['PACIENTES'] == paciente_id]
-    if fila.empty:
-        return None
-    X_paciente = fila[MARCADORES_MODELO].values
-    X_paciente_scaled = scaler.transform(X_paciente)
-    prob = modelo_lr.predict_proba(X_paciente_scaled)[0, 1]
-    return prob
+# ============================================================
+# COLORES
+# ============================================================
 
+COLOR_AV0 = '#4C72B0'
+COLOR_AV1 = '#DD8452'
+COLOR_PACIENTE = '#2CA02C'
 
-# FUNCIONES AUXILIARES PARA EL ANÁLISIS
-
-def calcular_distancia_mahalanobis(col_a, col_b):
-    """Calcula la distancia de Mahalanobis entre dos grupos para dos variables"""
-    X0 = df0[[col_a, col_b]].dropna().values
-    X1 = df1[[col_a, col_b]].dropna().values
-    
-    if len(X0) < 2 or len(X1) < 2:
-        return np.nan
-    
-    mu0, mu1 = X0.mean(axis=0), X1.mean(axis=0)
-    n0, n1 = len(X0), len(X1)
-    
-    cov_pooled = ((n0-1)*np.cov(X0, rowvar=False) +
-                  (n1-1)*np.cov(X1, rowvar=False)) / (n0+n1-2)
-    
-    try:
-        return mahalanobis(mu0, mu1, np.linalg.inv(cov_pooled))
-    except np.linalg.LinAlgError:
-        return np.nan
+LABEL_AV0 = 'AV = 0'
+LABEL_AV1 = 'AV = 1'
 
 
-def crear_puntos_elipse(center, width, height, angle, num_points=100):
-    """Crea puntos para dibujar una elipse en plotly"""
-    t = np.linspace(0, 2*np.pi, num_points)
-    
-    x_local = (width/2) * np.cos(t)
-    y_local = (height/2) * np.sin(t)
-    
-    angle_rad = np.radians(angle)
-    cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
-    x_rot = cos_a * x_local - sin_a * y_local
-    y_rot = sin_a * x_local + cos_a * y_local
-    
-    x = x_rot + center[0]
-    y = y_rot + center[1]
-    
-    return x, y
 
+def construir_histograma(variable, paciente_id=None):
 
-def crear_elipses_confianza(col_a, col_b):
-    """Crea las elipses de confianza para ambos grupos"""
-    elipses = {}
-    
-    for grp, color, label in [(0, COLOR_AV0, LABEL_AV0), (1, COLOR_AV1, LABEL_AV1)]:
-        sub = df[df["AV"] == grp]
-        vals = sub[[col_a, col_b]].dropna().values
-        
-        if len(vals) < 2:
-            continue
-        
-        mu = vals.mean(axis=0)
-        cov = np.cov(vals, rowvar=False)
-        
-        try:
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            order = eigvals.argsort()[::-1]
-            eigvals, eigvecs = eigvals[order], eigvecs[:, order]
-            
-            angle = np.degrees(np.arctan2(*eigvecs[:, 0][::-1]))
-            
-            k = 1.96
-            width = 2 * k * np.sqrt(eigvals[0])
-            height = 2 * k * np.sqrt(eigvals[1])
-            
-            elipses[grp] = {
-                'center': mu,
-                'width': width,
-                'height': height,
-                'angle': angle,
-                'color': color
-            }
-        except:
-            pass
-    
-    return elipses
-
-
-def construir_scatter(eje_x, eje_y, escala_x, escala_y, paciente_id=None):
-    """Construye el scatter plot. Si paciente_id se da, lo destaca."""
     fig = go.Figure()
 
-    dist_mahal = calcular_distancia_mahalanobis(eje_x, eje_y)
-    elipses = crear_elipses_confianza(eje_x, eje_y)
+    # --------------------------------------------------------
+    # Histograma general
+    # --------------------------------------------------------
 
-    # Elipses de confianza
-    for grp, elipse_data in elipses.items():
-        x_elipse, y_elipse = crear_puntos_elipse(
-            center=elipse_data['center'],
-            width=elipse_data['width'],
-            height=elipse_data['height'],
-            angle=elipse_data['angle']
-        )
+    fig.add_trace(go.Histogram(
 
-        label = LABEL_AV0 if grp == 0 else LABEL_AV1
-        fig.add_trace(go.Scatter(
-            x=x_elipse,
-            y=y_elipse,
-            mode='lines',
-            name=f"{label} (95% conf)",
-            line=dict(color=elipse_data['color'], width=2, dash='dash'),
-            hoverinfo='skip',
-            showlegend=True
-        ))
+        x=df[variable],
 
-        fig.add_trace(go.Scatter(
-            x=[elipse_data['center'][0]],
-            y=[elipse_data['center'][1]],
-            mode='markers+text',
-            name=f"{label} (centroide)",
-            marker=dict(size=20, color=elipse_data['color'], symbol='x'),
-            hovertemplate=f"<b>Centroide {label}</b><br>X: %{{x:.2f}}<br>Y: %{{y:.2f}}<extra></extra>",
-            showlegend=False
-        ))
+        nbinsx=20,
 
-    # Si hay paciente seleccionado, los puntos del resto se hacen más tenues
-    opacity_otros = 0.25 if paciente_id is not None else 0.6
-
-    fig.add_trace(go.Scatter(
-        x=df0[eje_x].dropna(),
-        y=df0[eje_y].dropna(),
-        mode='markers',
-        name=LABEL_AV0,
         marker=dict(
-            size=8,
-            color=COLOR_AV0,
-            opacity=opacity_otros,
-            line=dict(width=0.5, color='white')
+            color='rgba(120,120,120,0.6)',
+            line=dict(
+                color='white',
+                width=1
+            )
         ),
-        text=df0['PACIENTES'],
-        hovertemplate=f"<b>Paciente</b>: %{{text}}<br>{eje_x}: %{{x:.2f}}<br>{eje_y}: %{{y:.2f}}<extra></extra>"
+
+        name='Distribución'
     ))
 
-    fig.add_trace(go.Scatter(
-        x=df1[eje_x].dropna(),
-        y=df1[eje_y].dropna(),
-        mode='markers',
-        name=LABEL_AV1,
-        marker=dict(
-            size=8,
-            color=COLOR_AV1,
-            opacity=opacity_otros,
-            line=dict(width=0.5, color='white')
-        ),
-        text=df1['PACIENTES'],
-        hovertemplate=f"<b>Paciente</b>: %{{text}}<br>{eje_x}: %{{x:.2f}}<br>{eje_y}: %{{y:.2f}}<extra></extra>"
-    ))
+    # --------------------------------------------------------
+    # Paciente seleccionado
+    # --------------------------------------------------------
 
-    # Punto destacado del paciente
     if paciente_id is not None:
+
         fila = df[df['PACIENTES'] == paciente_id]
+
         if not fila.empty:
-            grp_paciente = int(fila['AV'].values[0])
-            label_grp = LABEL_AV0 if grp_paciente == 0 else LABEL_AV1
+
+            valor = fila[variable].values[0]
+
+            av_real = int(fila['AV'].values[0])
+
+            color_sel = COLOR_AV0 if av_real == 0 else COLOR_AV1
+
+            # Línea vertical
+            fig.add_vline(
+                x=valor,
+
+                line_width=4,
+
+                line_dash='dash',
+
+                line_color=color_sel
+            )
+
+            # Marcador
             fig.add_trace(go.Scatter(
-                x=fila[eje_x],
-                y=fila[eje_y],
+
+                x=[valor],
+                y=[0],
+
                 mode='markers',
-                name=f"Paciente {paciente_id}",
+
                 marker=dict(
-                    size=22,
-                    color=COLOR_PACIENTE,
-                    symbol='star',
-                    line=dict(width=2, color='black')
+                    size=16,
+                    color=color_sel,
+                    symbol='diamond-open',
+                    line=dict(
+                        width=3,
+                        color='black'
+                    )
                 ),
-                hovertemplate=(
-                    f"<b>Paciente {paciente_id}</b> ({label_grp})<br>"
-                    f"{eje_x}: %{{x:.2f}}<br>"
-                    f"{eje_y}: %{{y:.2f}}<extra></extra>"
-                )
+
+                name=f'Paciente {paciente_id}',
+
+                hovertemplate=
+                f"<b>Paciente {paciente_id}</b><br>" +
+                f"{variable}: {valor:.2f}<extra></extra>"
             ))
 
-    title_text = f"<b>{eje_x} vs {eje_y}</b>"
-    if not np.isnan(dist_mahal):
-        title_text += f"<br>Distancia Mahalanobis: {dist_mahal:.3f}"
+    # --------------------------------------------------------
+    # Layout
+    # --------------------------------------------------------
 
     fig.update_layout(
-        title=title_text,
-        xaxis_title=eje_x,
-        yaxis_title=eje_y,
-        xaxis_type=escala_x,
-        yaxis_type=escala_y,
-        height=1000,
-        hovermode='closest',
+
+        title={
+            'text': f'<b>Distribución: {variable}</b>',
+            'x': 0.5
+        },
+
         template='plotly_white',
-        margin=dict(l=60, b=60, t=100, r=20),
-        legend=dict(x=0.02, y=0.98, font=dict(size=20))
+
+        height=400,
+
+        bargap=0.05,
+
+        xaxis=dict(
+            title=variable
+        ),
+
+        yaxis=dict(
+            title='Frecuencia'
+        ),
+
+        margin=dict(
+            l=40,
+            r=20,
+            t=70,
+            b=40
+        )
     )
 
     return fig
 
-
 def construir_radar(paciente_id=None):
-    """Radar chart con perfil normalizado por grupo. Si paciente_id se da, lo superpone."""
-    marcadores_sin_demo = [m for m in MARCADORES if m.lower() not in ['edad', 'sexo']]
 
-    df_norm = df[marcadores_sin_demo].copy()
-    for col in marcadores_sin_demo:
-        mn, mx = df[col].min(), df[col].max()
-        df_norm[col] = (df[col] - mn) / (mx - mn) * 100
+    # --------------------------------------------------------
+    # Marcadores
+    # --------------------------------------------------------
+
+    marker_cols = [
+        c for c in MARCADORES
+        if c.lower() not in ['edad', 'sexo']
+    ]
+
+    # --------------------------------------------------------
+    # Normalización global Min-Max
+    # --------------------------------------------------------
+
+    df_norm = df[marker_cols].copy()
+
+    for col in marker_cols:
+
+        mn = df[col].min()
+        mx = df[col].max()
+
+        df_norm[col] = (
+            (df[col] - mn) / (mx - mn)
+        ) * 100
+
+    # --------------------------------------------------------
+    # Medias grupos
+    # --------------------------------------------------------
 
     mean0 = df_norm[df['AV'] == 0].mean()
     mean1 = df_norm[df['AV'] == 1].mean()
 
-    labels = list(marcadores_sin_demo)
+    labels = marker_cols
 
     fig = go.Figure()
 
-    for mean, color, label in [(mean0, COLOR_AV0, LABEL_AV0), (mean1, COLOR_AV1, LABEL_AV1)]:
-        vals = mean.tolist() + [mean.iloc[0]]
-        fig.add_trace(go.Scatterpolar(
-            r=vals,
-            theta=labels + [labels[0]],
-            fill='toself',
-            name=label,
-            line=dict(color=color),
-            marker=dict(size=5),
-            fillcolor=color,
-            opacity=0.3
-        ))
+    # --------------------------------------------------------
+    # Grupo AV=0
+    # --------------------------------------------------------
 
-    # Superponer paciente
+    vals0 = mean0.tolist()
+    vals0 += [vals0[0]]
+
+    fig.add_trace(go.Scatterpolar(
+
+        r=vals0,
+
+        theta=labels + [labels[0]],
+
+        fill='toself',
+
+        name=LABEL_AV0,
+
+        line=dict(
+            color=COLOR_AV0,
+            width=2
+        ),
+
+        fillcolor='rgba(76,114,176,0.20)'
+    ))
+
+    # --------------------------------------------------------
+    # Grupo AV=1
+    # --------------------------------------------------------
+
+    vals1 = mean1.tolist()
+    vals1 += [vals1[0]]
+
+    fig.add_trace(go.Scatterpolar(
+
+        r=vals1,
+
+        theta=labels + [labels[0]],
+
+        fill='toself',
+
+        name=LABEL_AV1,
+
+        line=dict(
+            color=COLOR_AV1,
+            width=2
+        ),
+
+        fillcolor='rgba(221,132,82,0.20)'
+    ))
+
+    # --------------------------------------------------------
+    # Paciente seleccionado
+    # --------------------------------------------------------
+
     if paciente_id is not None:
-        fila_norm = df_norm[df['PACIENTES'] == paciente_id]
-        if not fila_norm.empty:
-            vals_p = fila_norm.iloc[0].tolist() + [fila_norm.iloc[0, 0]]
+
+        idx = df[df['PACIENTES'] == paciente_id].index
+
+        if len(idx) > 0:
+
+            vals_p = df_norm.loc[idx[0], marker_cols].tolist()
+            vals_p += [vals_p[0]]
+
             fig.add_trace(go.Scatterpolar(
+
                 r=vals_p,
+
                 theta=labels + [labels[0]],
+
                 fill='toself',
-                name=f"Paciente {paciente_id}",
-                line=dict(color=COLOR_PACIENTE, width=3),
-                marker=dict(size=8, color=COLOR_PACIENTE),
-                fillcolor=COLOR_PACIENTE,
-                opacity=0.5
+
+                name=f'Paciente {paciente_id}',
+
+                line=dict(
+                    color=COLOR_PACIENTE,
+                    width=3
+                ),
+
+                fillcolor='rgba(44,160,44,0.15)'
             ))
 
+    # --------------------------------------------------------
+    # Layout
+    # --------------------------------------------------------
+
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        title='Perfil medio normalizado por grupo AV (Radar Chart)',
-        height=1000,
-        showlegend=True,
+
+        title={
+            'text': '<b>Perfil normalizado de marcadores</b>',
+            'x': 0.5
+        },
+
+
         template='plotly_white',
-        legend=dict(x=0.02, y=0.98, font=dict(size=20))
+
+        height=500,
+
+        margin=dict(
+            l=40,
+            r=40,
+            t=70,
+            b=40
+        ),
+
+        legend=dict(
+            x=0.02,
+            y=1.1
+        )
+    )
+
+    return fig
+
+# ============================================================
+# APP
+# ============================================================
+
+external_stylesheets = [
+    'https://codepen.io/chriddyp/pen/bWLwgP.css'
+]
+
+app = dash.Dash(
+    __name__,
+    external_stylesheets=external_stylesheets
+)
+
+# ============================================================
+# FIGURA PCA
+# ============================================================
+
+def construir_pca(paciente_id):
+
+    fig = go.Figure()
+
+    # --------------------------------------------------------
+    # PUNTOS AV = 0
+    # --------------------------------------------------------
+
+    df0 = df_pca[df_pca['AV'] == 0]
+
+    fig.add_trace(go.Scatter(
+        x=df0['PC1'],
+        y=df0['PC2'],
+        mode='markers',
+        name=LABEL_AV0,
+
+        marker=dict(
+            size=10,
+            color=COLOR_AV0,
+            opacity=0.8,
+            line=dict(
+                width=0.5,
+                color='white'
+            )
+        ),
+
+        text=df0['PACIENTES'],
+
+        hovertemplate=
+        "<b>%{text}</b><br>" +
+        "PC1: %{x:.2f}<br>" +
+        "PC2: %{y:.2f}<extra></extra>"
+    ))
+
+    # --------------------------------------------------------
+    # PUNTOS AV = 1
+    # --------------------------------------------------------
+
+    df1 = df_pca[df_pca['AV'] == 1]
+
+    fig.add_trace(go.Scatter(
+        x=df1['PC1'],
+        y=df1['PC2'],
+        mode='markers',
+        name=LABEL_AV1,
+
+        marker=dict(
+            size=10,
+            color=COLOR_AV1,
+            opacity=0.8,
+            line=dict(
+                width=0.5,
+                color='white'
+            )
+        ),
+
+        text=df1['PACIENTES'],
+
+        hovertemplate=
+        "<b>%{text}</b><br>" +
+        "PC1: %{x:.2f}<br>" +
+        "PC2: %{y:.2f}<extra></extra>"
+    ))
+
+    # --------------------------------------------------------
+    # PACIENTE DESTACADO
+    # --------------------------------------------------------
+
+    fila = df_pca[df_pca['PACIENTES'] == paciente_id]
+
+    if not fila.empty:
+
+        av_real = int(fila['AV'].values[0])
+
+        label_real = LABEL_AV0 if av_real == 0 else LABEL_AV1
+
+        fig.add_trace(go.Scatter(
+            x=fila['PC1'],
+            y=fila['PC2'],
+
+            mode='markers',
+
+            name=f'Paciente {paciente_id}',
+
+            marker=dict(
+                size=20,
+                color=COLOR_PACIENTE,
+                symbol='circle-open',
+                line=dict(
+                    width=3,
+                )
+            ),
+
+            hovertemplate=
+            f"<b>Paciente {paciente_id}</b><br>" +
+            f"{label_real}<br>" +
+            "PC1: %{x:.2f}<br>" +
+            "PC2: %{y:.2f}<extra></extra>"
+        ))
+
+    # --------------------------------------------------------
+    # Layout
+    # --------------------------------------------------------
+
+    fig.update_layout(
+
+        title={
+            'text': '<b>PCA de marcadores cardíacos</b>',
+            'x': 0.5
+        },
+
+        xaxis=dict(
+            title='Componente Principal 1'
+        ),
+
+        yaxis=dict(
+            title='Componente Principal 2'
+        ),
+
+        template='plotly_white',
+
+        hovermode='closest',
+
+        height=800,
+
+        legend=dict(
+            x=0.02,
+            y=0.98,
+            font=dict(size=16)
+        ),
+
+        margin=dict(
+            l=50,
+            r=20,
+            t=80,
+            b=50
+        )
     )
 
     return fig
 
 
-# CREAR APP
+# ============================================================
+# TABLA PACIENTE
+# ============================================================
 
-external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
-app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
-app.config.suppress_callback_exceptions = True  # lo ponemos para evitar errores al cargar los callbacks de pestañas que no están en el layout inicial
-
-# LAYOUTS POR PESTAÑA
-
-# --- Layout pestaña GRUPAL (la original) ---
-layout_grupal = html.Div([
-    html.H2("Análisis de Grupos y Relaciones",
-            style={'textAlign': 'center', 'marginBottom': 30}),
-
-    html.Div([
-        html.Div([
-            dcc.Graph(id='graph-scatter-grupo')
-        ], style={
-            'width': '70%',
-            'display': 'inline-block',
-            'verticalAlign': 'middle',
-            'padding': '20px',
-            'boxSizing': 'border-box'
-        }),
-
-        html.Div([
-            html.Div([
-                html.H3("Controles", style={'marginTop': 0}),
-
-                html.Div([
-                    html.Label("Eje X:", style={'fontWeight': 'bold', 'marginTop': 20}),
-                    dcc.Dropdown(
-                        id='dropdown-eje-x',
-                        options=[{'label': m, 'value': m} for m in MARCADORES],
-                        value=MARCADORES[0],
-                        clearable=False
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Eje Y:", style={'fontWeight': 'bold'}),
-                    dcc.Dropdown(
-                        id='dropdown-eje-y',
-                        options=[{'label': m, 'value': m} for m in MARCADORES],
-                        value=MARCADORES[1],
-                        clearable=False
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Escala X:", style={'fontWeight': 'bold'}),
-                    dcc.RadioItems(
-                        id='radio-escala-x',
-                        options=[
-                            {'label': ' Lineal', 'value': 'linear'},
-                            {'label': ' Logarítmica', 'value': 'log'}
-                        ],
-                        value='linear',
-                        labelStyle={'display': 'block', 'marginBottom': 10}
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Escala Y:", style={'fontWeight': 'bold'}),
-                    dcc.RadioItems(
-                        id='radio-escala-y',
-                        options=[
-                            {'label': ' Lineal', 'value': 'linear'},
-                            {'label': ' Logarítmica', 'value': 'log'}
-                        ],
-                        value='linear',
-                        labelStyle={'display': 'block', 'marginBottom': 10}
-                    )
-                ], style={'marginBottom': 20}),
-
-            ], style={
-                'backgroundColor': 'rgb(250, 250, 250)',
-                'padding': '20px',
-                'borderRadius': '10px',
-                'borderLeft': '5px solid #4C72B0'
-            })
-        ], style={
-            'width': '28%',
-            'display': 'inline-block',
-            'verticalAlign': 'top',
-            'padding': '20px',
-            'boxSizing': 'border-box'
-        })
-    ], style={
-        'display': 'flex',
-        'width': '100%'
-    }),
-
-    html.Div([
-        dcc.Graph(id='graph-radar')
-    ], style={'padding': '20px'})
-], style={'padding': '20px'})
-
-
-# --- Layout pestaña INDIVIDUAL (nueva) ---
-layout_individual = html.Div([
-    html.H2("Análisis Individual del Paciente",
-            style={'textAlign': 'center', 'marginBottom': 30}),
-
-    html.Div([
-        # Columna izquierda: scatter
-        html.Div([
-            dcc.Graph(id='graph-scatter-individual')
-        ], style={
-            'width': '70%',
-            'display': 'inline-block',
-            'verticalAlign': 'middle',
-            'padding': '20px',
-            'boxSizing': 'border-box'
-        }),
-
-        # Columna derecha: controles + predicción + tabla
-        html.Div([
-            # Panel de controles
-            html.Div([
-                html.H3("Controles", style={'marginTop': 0}),
-
-                html.Div([
-                    html.Label("Paciente:", style={'fontWeight': 'bold', 'marginTop': 20}),
-                    dcc.Dropdown(
-                        id='dropdown-paciente',
-                        options=[{'label': p, 'value': p} for p in PACIENTES],
-                        value=PACIENTES[0],
-                        clearable=False
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Eje X:", style={'fontWeight': 'bold'}),
-                    dcc.Dropdown(
-                        id='dropdown-eje-x-ind',
-                        options=[{'label': m, 'value': m} for m in MARCADORES],
-                        value='LVEF' if 'LVEF' in MARCADORES else MARCADORES[0],
-                        clearable=False
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Eje Y:", style={'fontWeight': 'bold'}),
-                    dcc.Dropdown(
-                        id='dropdown-eje-y-ind',
-                        options=[{'label': m, 'value': m} for m in MARCADORES],
-                        value='LV MASS (g)' if 'LV MASS (g)' in MARCADORES else MARCADORES[1],
-                        clearable=False
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Escala X:", style={'fontWeight': 'bold'}),
-                    dcc.RadioItems(
-                        id='radio-escala-x-ind',
-                        options=[
-                            {'label': ' Lineal', 'value': 'linear'},
-                            {'label': ' Logarítmica', 'value': 'log'}
-                        ],
-                        value='linear',
-                        labelStyle={'display': 'block', 'marginBottom': 10}
-                    )
-                ], style={'marginBottom': 20}),
-
-                html.Div([
-                    html.Label("Escala Y:", style={'fontWeight': 'bold'}),
-                    dcc.RadioItems(
-                        id='radio-escala-y-ind',
-                        options=[
-                            {'label': ' Lineal', 'value': 'linear'},
-                            {'label': ' Logarítmica', 'value': 'log'}
-                        ],
-                        value='linear',
-                        labelStyle={'display': 'block', 'marginBottom': 10}
-                    )
-                ], style={'marginBottom': 20}),
-
-            ], style={
-                'backgroundColor': 'rgb(250, 250, 250)',
-                'padding': '20px',
-                'borderRadius': '10px',
-                'borderLeft': f'5px solid {COLOR_PACIENTE}',
-                'marginBottom': 20
-            }),
-
-            # Panel de predicción del modelo
-            html.Div(id='panel-prediccion', style={
-                'padding': '20px',
-                'borderRadius': '10px',
-                'marginBottom': 20
-            })
-
-        ], style={
-            'width': '28%',
-            'display': 'inline-block',
-            'verticalAlign': 'top',
-            'padding': '20px',
-            'boxSizing': 'border-box'
-        })
-    ], style={
-        'display': 'flex',
-        'width': '100%'
-    }),
-
-    # Radar
-    html.Div([
-        dcc.Graph(id='graph-radar-individual')
-    ], style={'padding': '20px'}),
-
-    # Tabla con los datos del paciente
-    html.Div([
-        html.H3("Datos del paciente vs. medias por grupo",
-                style={'textAlign': 'center', 'marginTop': 30, 'marginBottom': 20}),
-        html.Div(id='tabla-paciente')
-    ], style={'padding': '20px'})
-
-], style={'padding': '20px'})
-
-
-# LAYOUT PRINCIPAL CON PESTAÑAS
-
-
-app.layout = html.Div([
-    html.H1("Dashboard: Marcadores Pro-Arrítmicos",
-            style={'textAlign': 'center'}),
-
-    dcc.Tabs(id='tabs', value='tab-grupal', children=[
-        dcc.Tab(label='Análisis Grupal', value='tab-grupal',
-                style={'fontWeight': 'bold'},
-                selected_style={'fontWeight': 'bold', 'borderTop': f'3px solid {COLOR_AV0}'}),
-        dcc.Tab(label='Análisis Individual', value='tab-individual',
-                style={'fontWeight': 'bold'},
-                selected_style={'fontWeight': 'bold', 'borderTop': f'3px solid {COLOR_PACIENTE}'}),
-    ]),
-
-    html.Div(id='contenido-tab')
-])
-
-
-# CALLBACKS
-
-@callback(
-    Output('contenido-tab', 'children'),
-    Input('tabs', 'value')
-)
-def render_tab(tab):
-    if tab == 'tab-grupal':
-        return layout_grupal
-    elif tab == 'tab-individual':
-        return layout_individual
-
-
-# --- Callbacks de la pestaña GRUPAL (los originales) ---
-
-@callback(
-    Output('graph-scatter-grupo', 'figure'),
-    [Input('dropdown-eje-x', 'value'),
-     Input('dropdown-eje-y', 'value'),
-     Input('radio-escala-x', 'value'),
-     Input('radio-escala-y', 'value')]
-)
-def update_scatter_grupo(eje_x, eje_y, escala_x, escala_y):
-    """Actualiza el scatter plot cuando cambian los ejes o escalas"""
-    return construir_scatter(eje_x, eje_y, escala_x, escala_y, paciente_id=None)
-
-
-@callback(
-    Output('graph-radar', 'figure'),
-    [Input('dropdown-eje-x', 'value')]
-)
-def update_radar(dummy):
-    """Radar chart con perfil normalizado por grupo"""
-    return construir_radar(paciente_id=None)
-
-
-# --- Callbacks de la pestaña INDIVIDUAL (nuevos) ---
-
-@callback(
-    Output('graph-scatter-individual', 'figure'),
-    [Input('dropdown-eje-x-ind', 'value'),
-     Input('dropdown-eje-y-ind', 'value'),
-     Input('radio-escala-x-ind', 'value'),
-     Input('radio-escala-y-ind', 'value'),
-     Input('dropdown-paciente', 'value')],
-    prevent_initial_call=True
-)
-def update_scatter_individual(eje_x, eje_y, escala_x, escala_y, paciente_id):
-    return construir_scatter(eje_x, eje_y, escala_x, escala_y, paciente_id=paciente_id)
-
-
-@callback(
-    Output('graph-radar-individual', 'figure'),
-    [Input('dropdown-paciente', 'value')],
-    prevent_initial_call=True
-)
-def update_radar_individual(paciente_id):
-    return construir_radar(paciente_id=paciente_id)
-
-
-@callback(
-    Output('panel-prediccion', 'children'),
-    [Input('dropdown-paciente', 'value')],
-    prevent_initial_call=True
-)
-def update_prediccion(paciente_id):
-    """Muestra la probabilidad de arritmia estimada por el modelo"""
-    if paciente_id is None:
-        return html.Div()
-
-    prob = predecir_probabilidad(paciente_id)
-    fila = df[df['PACIENTES'] == paciente_id]
-    if fila.empty or prob is None:
-        return html.Div("Paciente no encontrado")
-
-    av_real = int(fila['AV'].values[0])
-    label_real = LABEL_AV0 if av_real == 0 else LABEL_AV1
-
-    # Color del riesgo según probabilidad
-    if prob < 0.33:
-        color_riesgo = COLOR_AV0
-        nivel = "BAJO"
-    elif prob < 0.66:
-        color_riesgo = '#E5A23B'
-        nivel = "MEDIO"
-    else:
-        color_riesgo = COLOR_AV1
-        nivel = "ALTO"
-
-    return html.Div([
-        html.H3("Predicción del modelo", style={'marginTop': 0}),
-        html.P("Regresión Logística con SMOTE",
-               style={'fontStyle': 'italic', 'fontSize': 12, 'color': '#666', 'marginTop': 0}),
-
-        html.Div([
-            html.Div([
-                html.Span("Prob. de arritmia:", style={'fontWeight': 'bold'}),
-                html.Br(),
-                html.Span(f"{prob*100:.1f}%",
-                          style={'fontSize': 32, 'fontWeight': 'bold', 'color': color_riesgo})
-            ], style={'marginBottom': 15}),
-
-            # Barra visual de probabilidad
-            html.Div([
-                html.Div(style={
-                    'width': f'{prob*100}%',
-                    'height': '20px',
-                    'backgroundColor': color_riesgo,
-                    'borderRadius': '5px',
-                    'transition': 'width 0.5s'
-                })
-            ], style={
-                'width': '100%',
-                'height': '20px',
-                'backgroundColor': '#e0e0e0',
-                'borderRadius': '5px',
-                'marginBottom': 15
-            }),
-
-            html.Div([
-                html.Span("Nivel de riesgo: ", style={'fontWeight': 'bold'}),
-                html.Span(nivel, style={'color': color_riesgo, 'fontWeight': 'bold'})
-            ], style={'marginBottom': 10}),
-
-            html.Hr(),
-
-            html.Div([
-                html.Span("Estado real: ", style={'fontWeight': 'bold'}),
-                html.Span(label_real,
-                          style={'color': COLOR_AV0 if av_real == 0 else COLOR_AV1})
-            ])
-        ])
-    ], style={
-        'backgroundColor': 'rgb(250, 250, 250)',
-        'padding': '20px',
-        'borderRadius': '10px',
-        'borderLeft': f'5px solid {color_riesgo}'
-    })
-
-
-@callback(
-    Output('tabla-paciente', 'children'),
-    [Input('dropdown-paciente', 'value')],
-    prevent_initial_call=True
-)
-def update_tabla(paciente_id):
-    """Muestra una tabla con los datos del paciente comparados con las medias por grupo"""
-    if paciente_id is None:
-        return html.Div()
+def crear_tabla_paciente(paciente_id):
 
     fila = df[df['PACIENTES'] == paciente_id]
+
     if fila.empty:
         return html.Div("Paciente no encontrado")
 
     av_real = int(fila['AV'].values[0])
 
-    # Construimos los datos de la tabla (excluyendo SEXO y EDAD)
+    color_real = COLOR_AV0 if av_real == 0 else COLOR_AV1
+
     rows = []
-    for marcador in MARCADORES:
-        # Saltar SEXO y EDAD
-        if marcador.lower() in ['sexo', 'edad']:
-            continue
-            
-        valor_paciente = fila[marcador].values[0]
-        media_av0 = df0[marcador].mean()
-        media_av1 = df1[marcador].mean()
 
-        dist_0 = abs(valor_paciente - media_av0)
-        dist_1 = abs(valor_paciente - media_av1)
-        mas_cerca = 'AV = 0' if dist_0 < dist_1 else 'AV = 1'
+    for marcador in MARCADORES_PCA:
 
-        rows.append({
-            'Marcador': marcador,
-            'Valor paciente': f"{valor_paciente:.2f}",
-            'Media AV=0': f"{media_av0:.2f}",
-            'Media AV=1': f"{media_av1:.2f}",
-            'Más cerca de': mas_cerca
-        })
-        if marcador.lower() in ['sexo', 'edad']:
-            continue
-    # Estilos condicionales: resaltar la columna del grupo real del paciente
-    grupo_real_col = 'Media AV=0' if av_real == 0 else 'Media AV=1'
+        valor = fila[marcador].values[0]
 
-    return dash_table.DataTable(
-        data=rows,
-        columns=[{'name': c, 'id': c} for c in
-                 ['Marcador', 'Valor paciente', 'Media AV=0', 'Media AV=1', 'Más cerca de']],
-        style_cell={
-            'textAlign': 'center',
-            'padding': '10px',
-            'fontFamily': 'sans-serif'
-        },
-        style_header={
-            'backgroundColor': 'rgb(230, 230, 230)',
-            'fontWeight': 'bold',
-            'border': '1px solid #ccc'
-        },
-        style_data_conditional=[
-            # Resaltar columna "Valor paciente"
-            {
-                'if': {'column_id': 'Valor paciente'},
-                'backgroundColor': 'rgba(44, 160, 44, 0.15)',
-                'fontWeight': 'bold'
-            },
-            # Resaltar columna del grupo real
-            {
-                'if': {'column_id': grupo_real_col},
-                'backgroundColor': f'rgba({76 if av_real == 0 else 221}, '
-                                   f'{114 if av_real == 0 else 132}, '
-                                   f'{176 if av_real == 0 else 82}, 0.15)'
-            },
-            # Resaltar fila si "Más cerca de" coincide con AV=1 (alerta)
-            {
-                'if': {
-                    'filter_query': '{Más cerca de} = "AV = 1"',
-                    'column_id': 'Más cerca de'
-                },
-                'color': COLOR_AV1,
-                'fontWeight': 'bold'
-            },
-            {
-                'if': {
-                    'filter_query': '{Más cerca de} = "AV = 0"',
-                    'column_id': 'Más cerca de'
-                },
-                'color': COLOR_AV0,
-                'fontWeight': 'bold'
-            }
+        media0 = df[df['AV'] == 0][marcador].mean()
+        media1 = df[df['AV'] == 1][marcador].mean()
+
+        rows.append(html.Tr([
+            html.Td(marcador),
+            html.Td(f"{valor:.2f}"),
+            html.Td(f"{media0:.2f}"),
+            html.Td(f"{media1:.2f}")
+        ]))
+
+    return html.Div([
+
+        html.H4(
+            f"Paciente seleccionado: {paciente_id}",
+            style={'color': color_real}
+        ),
+
+        html.Table([
+
+            html.Thead(
+                html.Tr([
+                    html.Th("Marcador"),
+                    html.Th("Paciente"),
+                    html.Th("Media AV=0"),
+                    html.Th("Media AV=1")
+                ])
+            ),
+
+            html.Tbody(rows)
+
         ],
-        style_table={'overflowX': 'auto'}
-    )
 
+        style={
+            'width': '100%',
+            'borderCollapse': 'collapse'
+        })
+
+    ])
+
+
+# ============================================================
+# LAYOUT
+# ============================================================
+
+app.layout = html.Div([
+
+    html.H1(
+        "Dashboard Arritmias",
+        style={
+            'textAlign': 'center',
+            'marginBottom': '30px'
+        }
+    ),
+
+    html.Div([
+
+        # =====================================================
+        # IZQUIERDA - PCA
+        # =====================================================
+
+        html.Div([
+
+            dcc.Graph(
+                id='graph-pca',
+                clear_on_unhover=False
+            )
+
+        ],
+
+        style={
+            'width': '58%',
+            'display': 'inline-block',
+            'verticalAlign': 'top'
+        }),
+
+        # =====================================================
+        # DERECHA
+        # =====================================================
+
+        html.Div([
+
+            html.Div([
+
+                html.Label(
+                    "Variables",
+                    style={
+                        'fontWeight': 'bold',
+                        'marginBottom': '10px'
+                    }
+                ),
+
+                dcc.Dropdown(
+
+                    id='dropdown-variable',
+
+                    options=[
+                        {
+                            'label': v,
+                            'value': v
+                        }
+                        for v in VARIABLES_HISTOGRAMA
+                    ],
+
+                    value='EDAD',
+
+                    clearable=False
+                )
+
+            ],
+
+            style={
+                'marginBottom': '10px'
+            }),
+
+            dcc.Graph(
+                id='histograma-variable'
+            ),
+
+            dcc.Graph(
+                id='radar-plot'
+            )
+
+        ],
+
+        style={
+            'width': '40%',
+            'display': 'inline-block',
+            'verticalAlign': 'top',
+            'paddingLeft': '20px'
+        })
+
+    ])
+
+])
+
+
+# ============================================================
+# CALLBACKS
+# ============================================================
+
+@app.callback(
+    Output('graph-pca', 'figure'),
+    Input('graph-pca', 'clickData')
+)
+def update_graph(clickData):
+
+    paciente_id = None
+
+    # --------------------------------------------------------
+    # Si el usuario hace click en un punto
+    # --------------------------------------------------------
+
+    if clickData is not None:
+
+        paciente_id = clickData['points'][0]['text']
+
+    return construir_pca(paciente_id)
+
+
+@app.callback(
+    Output('tabla-paciente', 'children'),
+    Input('dropdown-paciente', 'value')
+)
+def update_tabla(paciente_id):
+
+    return crear_tabla_paciente(paciente_id)
+
+@app.callback(
+    Output('histograma-variable', 'figure'),
+
+    [
+        Input('graph-pca', 'clickData'),
+        Input('dropdown-variable', 'value')
+    ]
+)
+def update_histograma(clickData, variable):
+
+    paciente_id = None
+
+    if clickData is not None:
+
+        paciente_id = clickData['points'][0]['text']
+
+    return construir_histograma(variable, paciente_id)
+
+
+@app.callback(
+    Output('radar-plot', 'figure'),
+    Input('graph-pca', 'clickData')
+)
+def update_radar(clickData):
+
+    paciente_id = None
+
+    if clickData is not None:
+
+        paciente_id = clickData['points'][0]['text']
+
+    return construir_radar(paciente_id)
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 if __name__ == '__main__':
     app.run(debug=True)
