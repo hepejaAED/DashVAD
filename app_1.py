@@ -165,7 +165,7 @@ app.layout = html.Div([
                 dcc.Dropdown(
                     id='dropdown-variable',
                     options=[{'label': v, 'value': v} for v in VARS_HISTO],
-                    value='EDAD', clearable=False
+                    value='LVEF', clearable=False
                 )
             ], style={'marginBottom': '10px'}),
             dcc.Graph(id='histograma-variable'),
