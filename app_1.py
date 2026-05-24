@@ -176,10 +176,11 @@ app.layout = html.Div([
 
 # ── Callbacks ─────────────────────────────────────────────────
 
+# Cuando se haga click en un punto de la gráfica de PCA dash genere un diccionario que se llame clickdata
 def get_paciente(clickData):
-    return clickData['points'][0]['text'] if clickData else None
+    return clickData['points'][0]['text'] if clickData else None # Ponemos [0] porque es paciente, en un instante inicial está en None
 
-@app.callback(Output('graph-pca', 'figure'), Input('graph-pca', 'clickData'))
+@app.callback(Output('graph-pca', 'figure'), Input('graph-pca', 'clickData')) # Cuando el usuario haga click en la gráfica se actualiza la figura
 def update_pca(clickData):
     return construir_pca(get_paciente(clickData))
 
@@ -195,7 +196,7 @@ def update_histograma(clickData, variable):
 def update_radar(clickData):
     return construir_radar(get_paciente(clickData))
 
-# ── Main ──────────────────────────────────────────────────────
+
 
 if __name__ == '__main__':
     app.run(debug=True)
